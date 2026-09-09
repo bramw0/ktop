@@ -79,6 +79,8 @@ class Task<T>(val taskName: String, val initialValue: TaskValue<T> = null, val w
     // Reference to Task lifecycle?
     lateinit var handle: Job
 
+    lateinit var parent: Task<*>
+
     val valueSubscribersMutex = Mutex()
     var valueSubscribers = mutableListOf<TaskSubscriberFunction<T>>()
     val channel = TaskChannel(this)
@@ -140,7 +142,7 @@ class Task<T>(val taskName: String, val initialValue: TaskValue<T> = null, val w
     }
 
     fun copy(): Task<T> {
-        val t = TaskExecutor.createTask(initialValue, work)
+        val t = TaskExecutor.createTask(initialValue = initialValue, work = work)
         t.valueSubscribers.addAll(valueSubscribers)
         return t
     }

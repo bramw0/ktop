@@ -64,16 +64,17 @@ data object TaskExecutor {
         return job
     }
 
-    fun <T> createTask(initialValue: TaskValue<T> = null, work: TaskWorkFunction<T>): Task<T> {
+    fun <T> createTask(initialValue: TaskValue<T> = null, parentTask: Task<*>? = null, work: TaskWorkFunction<T>): Task<T> {
         val taskName = Thread.currentThread().stackTrace[3].methodName
         val t = Task(taskName, initialValue, work)
+        parentTask?.let { t.parent = it }
         t.handle = launchTask(t)
 
         return t
     }
 
     fun <T> startTask(initialValue: TaskValue<T> = null, work: TaskWorkFunction<T>): Task<T> {
-        val t = createTask(initialValue, work)
+        val t = createTask(initialValue = initialValue, work = work)
         start(t)
         return t
     }

@@ -241,7 +241,7 @@ infix fun <T, V> Task<T>.par(other: Task<V>): Task<Pair<TaskValue<T>, TaskValue<
     // cannot be used, as they may be restarted.
     val initialValue: TaskValue<Pair<TaskValue<T>, TaskValue<V>>> = unstableTaskValue(Pair(null, null))
 
-    return TaskExecutor.createTask(initialValue) {
+    return TaskExecutor.createTask(initialValue = initialValue) {
         var lhs = this@par
         var rhs = other
 
@@ -297,7 +297,7 @@ fun <T> MutableList<Task<T>>.par(): Task<MutableList<TaskValue<T>>> {
     )
 
     // Immediately start the new task
-    return TaskExecutor.createTask(initialValue) {
+    return TaskExecutor.createTask(initialValue = initialValue) {
         forEachIndexed { index, task ->
             task.subscribeWithoutInitialValue { v ->
                 this@createTask.value?.let { notNullValue ->
@@ -522,11 +522,6 @@ fun <T> updateListInformation(
     }
 }
 
-//inline fun <reified T> updateListInformation(value: Collection<T>): Task<MutableList<TaskValue<T>>> {
-//    val tasks = value.map { updateInformation(it) }.toMutableList()
-//    return tasks.par()
-//}
-
 fun <T> updateGenericInformation(value: T, f: @Composable (Task<T>) -> @Composable (T) -> Unit): Task<T> {
     return TaskExecutor.createTask {
         if (value == null) {
@@ -562,7 +557,7 @@ fun <T> updateGenericInformation(value: T, f: @Composable (Task<T>) -> @Composab
 }
 
 fun <T> pure(v: T): Task<T> {
-    return TaskExecutor.createTask(stableTaskValue(v)) {}
+    return TaskExecutor.createTask(initialValue = stableTaskValue(v)) {}
 }
 
 fun start(task: Task<*>) {
