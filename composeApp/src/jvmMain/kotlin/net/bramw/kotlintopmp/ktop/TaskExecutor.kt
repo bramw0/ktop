@@ -1,4 +1,4 @@
-package solution12
+package net.bramw.kotlintopmp.ktop
 
 import kotlinx.coroutines.*
 import kotlin.concurrent.atomics.AtomicInt
@@ -64,7 +64,7 @@ data object TaskExecutor {
         return job
     }
 
-    fun <T> createTask(initialValue: TaskValue<T> = null, parentTask: Task<*>? = null, work: TaskWorkFunction<T>): Task<T> {
+    fun <T> createTask(initialValue: Value<T> = null, parentTask: Task<*>? = null, work: WorkFunction<T>): Task<T> {
         val taskName = Thread.currentThread().stackTrace[3].methodName
         val t = Task(taskName, initialValue, work)
         parentTask?.let { t.parent = it }
@@ -73,7 +73,7 @@ data object TaskExecutor {
         return t
     }
 
-    fun <T> startTask(initialValue: TaskValue<T> = null, work: TaskWorkFunction<T>): Task<T> {
+    fun <T> startTask(initialValue: Value<T> = null, work: WorkFunction<T>): Task<T> {
         val t = createTask(initialValue = initialValue, work = work)
         start(t)
         return t

@@ -1,4 +1,4 @@
-package solution12
+package net.bramw.kotlintopmp.ktop
 
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.text.input.rememberTextFieldState
@@ -10,40 +10,35 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import net.bramw.kotlintopmp.*
-import solution12.TaskEvent.*
-import solution12.TaskStability.Stable
-import solution12.TaskStability.Unstable
+import net.bramw.kotlintopmp.ktop.Event.*
+import net.bramw.kotlintopmp.ktop.Stability.*
 import kotlin.reflect.full.isSubclassOf
 
-typealias TaskContinuationPredicate<T, V> = (TaskValue<T>) -> V?
+typealias ContinuationPredicate<T, V> = (Value<T>) -> V?
 
-enum class TaskAction {
-    ActionContinue,
-}
-
-sealed class TaskContinuation<T, V> {
-    data class OnValue<T, V>(val predicate: TaskContinuationPredicate<T, V>) : TaskContinuation<T, V>()
-    data class OnAction<T, V>(val action: TaskAction, val predicate: TaskContinuationPredicate<T, V>) :
-        TaskContinuation<T, V>()
+sealed class Continuation<T, V> {
+    data class OnValue<T, V>(val predicate: ContinuationPredicate<T, V>) : Continuation<T, V>()
+    data class OnAction<T, V>(val action: UserAction, val predicate: ContinuationPredicate<T, V>) :
+        Continuation<T, V>()
 }
 
 class Pred<T, V>(block: Pred<T, V>.() -> Unit) {
-    lateinit var pred: Pred<T, V>.(TaskValue<T>) -> Boolean
-    lateinit var then: Pred<T, V>.(TaskValue<T>) -> Task<V>
+    lateinit var pred: Pred<T, V>.(Value<T>) -> Boolean
+    lateinit var then: Pred<T, V>.(Value<T>) -> Task<V>
 
     init {
         apply(block)
     }
 
-    fun pred(block: Pred<T, V>.(TaskValue<T>) -> Boolean) {
+    fun pred(block: Pred<T, V>.(Value<T>) -> Boolean) {
         this.pred = block
     }
 
-    fun then(block: Pred<T, V>.(TaskValue<T>) -> Task<V>) {
+    fun then(block: Pred<T, V>.(Value<T>) -> Task<V>) {
         this.then = block
     }
 
-    fun asFunction(): (TaskValue<T>) -> Task<V>? {
+    fun asFunction(): (Value<T>) -> Task<V>? {
         return { v ->
             if (pred(v)) {
                 then(v)
@@ -54,7 +49,7 @@ class Pred<T, V>(block: Pred<T, V>.() -> Unit) {
     }
 }
 
-fun <T, V> ifPred(block: Pred<T, V>.() -> Unit): (TaskValue<T>) -> Task<V>? {
+fun <T, V> ifPred(block: Pred<T, V>.() -> Unit): (Value<T>) -> Task<V>? {
     return Pred(block).asFunction()
 }
 
@@ -74,7 +69,7 @@ suspend fun suspendAndTunnelEvents(channel: TaskChannel<*>, targets: Collection<
     }
 }
 
-suspend fun suspendAndReceiveEvents(channel: TaskChannel<*>, block: suspend (TaskEvent) -> Boolean) {
+suspend fun suspendAndReceiveEvents(channel: TaskChannel<*>, block: suspend (Event) -> Boolean) {
     while (true) {
         val result = channel.receiveCatching()
         val event = result.getOrNull() ?: break
@@ -84,8 +79,8 @@ suspend fun suspendAndReceiveEvents(channel: TaskChannel<*>, block: suspend (Tas
 }
 
 
-infix fun <T, V> Task<T>.trans(f: Task<T>.(TaskValue<T>) -> TaskValue<V>): Task<V> {
-    val work: TaskWorkFunction<V> = work@{
+infix fun <T, V> Task<T>.trans(f: Task<T>.(Value<T>) -> Value<V>): Task<V> {
+    val work: WorkFunction<V> = work@{
         if (this@trans.handle.isActive) {
             this@trans.subscribe { v ->
                 println("Transform called")
@@ -119,7 +114,7 @@ infix fun <T, V> Task<T>.trans(f: Task<T>.(TaskValue<T>) -> TaskValue<V>): Task<
     }
 }
 
-infix fun <T, V> Task<T>.step(rhs: Collection<TaskContinuation<T, Task<V>>>): Task<V> {
+infix fun <T, V> Task<T>.step(rhs: Collection<Continuation<T, Task<V>>>): Task<V> {
     fun doContinue(taskV: Task<V>, taskT: Task<T>, result: Task<V>) {
         runBlocking {
             taskV.sendEvent(Continued(result))
@@ -132,7 +127,7 @@ infix fun <T, V> Task<T>.step(rhs: Collection<TaskContinuation<T, Task<V>>>): Ta
         println("current step lhs = ${lhs.fullID()}")
         lhs.subscribeWithoutInitialValue {
             for (cont in rhs) {
-                if (cont is TaskContinuation.OnValue<T, Task<V>>) {
+                if (cont is Continuation.OnValue<T, Task<V>>) {
                     cont.predicate(it)?.let { result ->
                         doContinue(this@createTask, this@step, result)
                         break
@@ -143,9 +138,9 @@ infix fun <T, V> Task<T>.step(rhs: Collection<TaskContinuation<T, Task<V>>>): Ta
         lhs.channel.subscribe {
             it.getOrNull()?.let { event ->
                 println("Received event $event")
-                if (event is Action) {
+                if (event is Event.Action) {
                     for (cont in rhs) {
-                        if (cont is TaskContinuation.OnAction<T, Task<V>> && cont.action == event.action) {
+                        if (cont is Continuation.OnAction<T, Task<V>> && cont.action == event.action) {
                             cont.predicate(value)?.let { result ->
                                 doContinue(this@createTask, this@step, result)
                                 return@subscribe true
@@ -221,9 +216,9 @@ infix fun <T, V> Task<T>.step(rhs: Collection<TaskContinuation<T, Task<V>>>): Ta
     }
 }
 
-infix fun <T, V> Task<T>.seq(other: Pred<T, V>.(TaskValue<T>) -> Task<V>): Task<V> {
+infix fun <T, V> Task<T>.seq(other: Pred<T, V>.(Value<T>) -> Task<V>): Task<V> {
     return (this step listOf(
-        TaskContinuation.OnValue(ifPred {
+        Continuation.OnValue(ifPred {
             pred { v ->
                 v.isStableValue()
             }
@@ -236,10 +231,10 @@ infix fun <T, V> Task<T>.seqNoShare(other: Task<V>): Task<V> {
     return (this seq { other })
 }
 
-infix fun <T, V> Task<T>.par(other: Task<V>): Task<Pair<TaskValue<T>, TaskValue<V>>> {
+infix fun <T, V> Task<T>.par(other: Task<V>): Task<Pair<Value<T>, Value<V>>> {
     // Initial value has Unstable stability since the current values of both tasks
     // cannot be used, as they may be restarted.
-    val initialValue: TaskValue<Pair<TaskValue<T>, TaskValue<V>>> = unstableTaskValue(Pair(null, null))
+    val initialValue: Value<Pair<Value<T>, Value<V>>> = unstableValue(Pair(null, null))
 
     return TaskExecutor.createTask(initialValue = initialValue) {
         var lhs = this@par
@@ -291,9 +286,9 @@ infix fun <T, V> Task<T>.par(other: Task<V>): Task<Pair<TaskValue<T>, TaskValue<
     }
 }
 
-fun <T> MutableList<Task<T>>.par(): Task<MutableList<TaskValue<T>>> {
+fun <T> MutableList<Task<T>>.par(): Task<MutableList<Value<T>>> {
     val initialValue = Pair(
-        MutableList<TaskValue<T>>(size) { null }, if (isEmpty()) Stable else Unstable
+        MutableList<Value<T>>(size) { null }, if (isEmpty()) Stable else Unstable
     )
 
     // Immediately start the new task
@@ -305,7 +300,7 @@ fun <T> MutableList<Task<T>>.par(): Task<MutableList<TaskValue<T>>> {
                     notNullValue.first[index] = v
 
                     if (notNullValue.first.all { tv -> tv.isStableValue() }) {
-                        this@createTask.value = TaskValue(notNullValue.first, Stable)
+                        this@createTask.value = Value(notNullValue.first, Stable)
                     }
                 }
             }
@@ -322,7 +317,7 @@ fun <T> MutableList<Task<T>>.par(): Task<MutableList<TaskValue<T>>> {
 
 infix fun <T> Task<T>.parOr(rhs: Task<T>): Task<T> {
     return (this par rhs).trans { v ->
-        var value: TaskValue<T> = null
+        var value: Value<T> = null
         v?.let { notNullValue ->
             println("Transforming value $notNullValue")
             val firstValue = notNullValue.first.first.hasValue()
@@ -353,9 +348,9 @@ infix fun <T> Task<T>.parOr(rhs: Task<T>): Task<T> {
     }
 }
 
-infix fun <T, V> Task<T>.parAnd(rhs: Task<V>): Task<Pair<TaskValue<T>, TaskValue<V>>> {
+infix fun <T, V> Task<T>.parAnd(rhs: Task<V>): Task<Pair<Value<T>, Value<V>>> {
     return (this par rhs).trans { v ->
-        var value: TaskValue<Pair<TaskValue<T>, TaskValue<V>>> = null
+        var value: Value<Pair<Value<T>, Value<V>>> = null
         v?.let { notNullValue ->
             val bothStable = notNullValue.first.first.isStableValue() && notNullValue.first.second.isStableValue()
             if (notNullValue.first.first.hasValue() && notNullValue.first.second.hasValue()) {
@@ -416,7 +411,7 @@ fun <T> viewGenericInformation(value: T, f: @Composable (T) -> Unit): Task<T> {
         if (value == null) {
             this.value = null
         } else {
-            this.value = unstableTaskValue(value)
+            this.value = unstableValue(value)
         }
 
         UI.add(this) {
@@ -435,7 +430,7 @@ fun <T> viewGenericInformation(value: T, f: @Composable (T) -> Unit): Task<T> {
                     true
                 }
 
-                is Action -> {
+                is Event.Action -> {
                     println("Received action: $event")
                     false
                 }
@@ -459,7 +454,7 @@ fun <T> List<T>.copy(index: Int? = null, value: T? = null): List<T> {
 }
 
 fun <T : Any> updateInformation(value: List<T>): Task<List<T>> {
-    return TaskExecutor.createTask(initialValue = unstableTaskValue(value)) {
+    return TaskExecutor.createTask(initialValue = unstableValue(value)) {
         val valuesMutex = Mutex()
         value.forEachIndexed { i, v ->
             val task = updateInformation(v)
@@ -468,7 +463,7 @@ fun <T : Any> updateInformation(value: List<T>): Task<List<T>> {
                     valuesMutex.withLock {
                         this@createTask.value?.let { notNullValue ->
                             val list = notNullValue.first
-                            this@createTask.value = unstableTaskValue(list.copy(i, it?.first))
+                            this@createTask.value = unstableValue(list.copy(i, it?.first))
                         }
                     }
                 }
@@ -498,7 +493,7 @@ fun updateNumberInformation(value: Number): Task<Number> = updateGenericInformat
 
 fun <T> updateListInformation(
     value: Collection<T>,
-    validator: (Int, TaskValue<Collection<T>>, CharSequence) -> Pair<Boolean, TaskValue<Collection<T>>>
+    validator: (Int, Value<Collection<T>>, CharSequence) -> Pair<Boolean, Value<Collection<T>>>
 ): Task<Collection<T>> {
     return updateGenericInformation(value) { task ->
         { v ->
@@ -527,7 +522,7 @@ fun <T> updateGenericInformation(value: T, f: @Composable (Task<T>) -> @Composab
         if (value == null) {
             this.value = null
         } else {
-            this.value = unstableTaskValue(value)
+            this.value = unstableValue(value)
         }
 
         UI.add(this) {
@@ -557,7 +552,7 @@ fun <T> updateGenericInformation(value: T, f: @Composable (Task<T>) -> @Composab
 }
 
 fun <T> pure(v: T): Task<T> {
-    return TaskExecutor.createTask(initialValue = stableTaskValue(v)) {}
+    return TaskExecutor.createTask(initialValue = stableValue(v)) {}
 }
 
 fun start(task: Task<*>) {

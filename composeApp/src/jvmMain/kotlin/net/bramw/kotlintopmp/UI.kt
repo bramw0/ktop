@@ -18,16 +18,12 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.awaitApplication
 import kotlinx.coroutines.runBlocking
-import solution12.Task
-import solution12.TaskAction
-import solution12.TaskEvent
-import solution12.TaskEvent.UserKeyPressed
-import solution12.TaskExecutor
-import solution12.TaskValue
-import solution12.fullID
-import solution12.hasValue
-import solution12.isNoValue
-import solution12.unstableTaskValue
+import net.bramw.kotlintopmp.ktop.Task
+import net.bramw.kotlintopmp.ktop.Event
+import net.bramw.kotlintopmp.ktop.TaskExecutor
+import net.bramw.kotlintopmp.ktop.Value
+import net.bramw.kotlintopmp.ktop.UserAction
+import net.bramw.kotlintopmp.ktop.fullID
 
 interface Display {
     fun display(): String
@@ -65,7 +61,7 @@ fun UpdateNumberValue(task: Task<Number>) = @Composable { value: Number ->
 }
 
 @Composable
-fun <T> UpdateGenericValue(value: T, task: Task<T>, validator: (TaskValue<T>, CharSequence) -> Pair<Boolean, TaskValue<T>>, f: (T) -> String = { it.toString() }) {
+fun <T> UpdateGenericValue(value: T, task: Task<T>, validator: (Value<T>, CharSequence) -> Pair<Boolean, Value<T>>, f: (T) -> String = { it.toString() }) {
     MaterialTheme {
         OutlinedTextField(
             state = rememberTextFieldState(initialText = f(value)),
@@ -93,7 +89,7 @@ fun <T> TaskRow(value: T, window: UI.UIWindow, f: @Composable (T) -> Unit) {
             onClick = {
                 println("CONTINUING")
                 runBlocking {
-                    window.task.sendEvent(TaskEvent.Action(TaskAction.ActionContinue))
+                    window.task.sendEvent(Event.Action(UserAction.Continue))
                 }
             }
         ) {
@@ -103,7 +99,7 @@ fun <T> TaskRow(value: T, window: UI.UIWindow, f: @Composable (T) -> Unit) {
             onClick = {
                 println("REMOVING")
                 runBlocking {
-                    window.task.sendEvent(TaskEvent.Stop)
+                    window.task.sendEvent(Event.Stop)
                 }
             }
         ) {
@@ -167,7 +163,7 @@ object UI {
     fun removeWindow(window: UIWindow) {
         windows.remove(window)
         runBlocking {
-            window.task.sendEvent(TaskEvent.Stop)
+            window.task.sendEvent(Event.Stop)
         }
     }
 

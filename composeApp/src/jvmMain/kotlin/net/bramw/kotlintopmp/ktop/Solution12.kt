@@ -1,11 +1,9 @@
-package solution12
+package net.bramw.kotlintopmp.ktop
 
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
-import solution12.TaskContinuation.OnValue
-import solution12.TaskStability.Stable
-import solution12.TaskStability.Unstable
+import net.bramw.kotlintopmp.ktop.Stability.Stable
 
 
 fun Job?.tag(): String {
@@ -121,17 +119,17 @@ fun main() {
 //            }
 //
             val t6 = createTask {
-                value = unstableTaskValue("Der")
+                value = unstableValue("Der")
                 delay(1000)
                 value = null
                 delay(1000)
-                value = stableTaskValue("Die")
+                value = stableValue("Die")
             }
 
             val t7 = createTask {
-                value = unstableTaskValue("Kip")
+                value = unstableValue("Kip")
                 delay(2000)
-                value = stableTaskValue("Lip")
+                value = stableValue("Lip")
             }
 
             val t8 = t6 parAnd t7

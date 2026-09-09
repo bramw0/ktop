@@ -1,4 +1,4 @@
-package solution12
+package net.bramw.kotlintopmp.ktop
 
 import androidx.compose.ui.input.key.Key
 import kotlinx.coroutines.*
@@ -7,40 +7,44 @@ import kotlinx.coroutines.channels.Channel.Factory.UNLIMITED
 import kotlinx.coroutines.channels.ChannelResult
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import solution12.TaskStability.*
+import net.bramw.kotlintopmp.ktop.Stability.*
 import kotlin.properties.Delegates
 
-enum class TaskStability {
+enum class Stability {
     Stable, Unstable,
 }
 
-sealed class TaskEvent {
-    data class Continued<T>(val t: Task<T>) : TaskEvent()
-    data class UserKeyPressed(val key: Key) : TaskEvent()
-    data class Action(val action: TaskAction) : TaskEvent()
-    data object Stop : TaskEvent()
+enum class UserAction {
+    Continue,
 }
 
-typealias TaskValue<T> = Pair<T, TaskStability>?
+sealed class Event {
+    data class Continued<T>(val t: Task<T>) : Event()
+    data class UserKeyPressed(val key: Key) : Event()
+    data class Action(val action: UserAction) : Event()
+    data object Stop : Event()
+}
 
-fun <T> unstableTaskValue(value: T): TaskValue<T> = if (value == null) null else TaskValue(value, Unstable)
-fun <T> stableTaskValue(value: T): TaskValue<T> = TaskValue(value, Stable)
-fun <T> TaskValue<T>.isStableValue(): Boolean = this != null && second == Stable
-fun <T> TaskValue<T>.isNoValue(): Boolean = !hasValue()
-fun <T> TaskValue<T>.isUnstableValue(): Boolean = this != null && second == Unstable
-fun <T> TaskValue<T>.hasValue(): Boolean = this != null
+typealias Value<T> = Pair<T, Stability>?
 
-typealias TaskWorkFunction<T> = suspend Task<T>.(TaskValue<T>) -> Unit
-typealias TaskSubscriberFunction<T> = Task<T>.(TaskValue<T>) -> Unit
-typealias TaskChannelSubscriberFunction<T> = Task<T>.(ChannelResult<TaskEvent>) -> Boolean
-typealias TaskDestructionFunction<T> = Task<T>.() -> Unit
+fun <T> unstableValue(value: T): Value<T> = if (value == null) null else Value(value, Unstable)
+fun <T> stableValue(value: T): Value<T> = Value(value, Stable)
+fun <T> Value<T>.isStableValue(): Boolean = this != null && second == Stable
+fun <T> Value<T>.isNoValue(): Boolean = !hasValue()
+fun <T> Value<T>.isUnstableValue(): Boolean = this != null && second == Unstable
+fun <T> Value<T>.hasValue(): Boolean = this != null
+
+typealias WorkFunction<T> = suspend Task<T>.(Value<T>) -> Unit
+private typealias SubscriberFunction<T> = Task<T>.(Value<T>) -> Unit
+private typealias ChannelSubscriberFunction<T> = Task<T>.(ChannelResult<Event>) -> Boolean
+private typealias DestructionFunction<T> = Task<T>.() -> Unit
 
 class TaskChannel<T>(val task: Task<T>) {
-    val channel: Channel<TaskEvent> = Channel(UNLIMITED)
-    var channelSubscribers = mutableListOf<TaskChannelSubscriberFunction<T>>()
+    val channel: Channel<Event> = Channel(UNLIMITED)
+    var channelSubscribers = mutableListOf<ChannelSubscriberFunction<T>>()
     val channelSubscribersMutex = Mutex()
 
-    fun subscribe(f: TaskChannelSubscriberFunction<T>) {
+    fun subscribe(f: ChannelSubscriberFunction<T>) {
         runBlocking {
             channelSubscribersMutex.withLock {
                 channelSubscribers.add(f)
@@ -48,10 +52,10 @@ class TaskChannel<T>(val task: Task<T>) {
         }
     }
 
-    suspend fun receiveCatching(): ChannelResult<TaskEvent> {
+    suspend fun receiveCatching(): ChannelResult<Event> {
         val result = channel.receiveCatching()
 
-        val removedSubscribers = mutableListOf<TaskChannelSubscriberFunction<T>>();
+        val removedSubscribers = mutableListOf<ChannelSubscriberFunction<T>>();
 
         channelSubscribers.forEach { f ->
             if (f(task, result)) {
@@ -70,29 +74,29 @@ class TaskChannel<T>(val task: Task<T>) {
         channel.cancel()
     }
 
-    suspend fun send(element: TaskEvent) {
+    suspend fun send(element: Event) {
         channel.send(element)
     }
 }
 
-class Task<T>(val taskName: String, val initialValue: TaskValue<T> = null, val work: TaskWorkFunction<T>) {
+class Task<T>(val taskName: String, val initialValue: Value<T> = null, val work: WorkFunction<T>) {
     // Reference to Task lifecycle?
     lateinit var handle: Job
 
     lateinit var parent: Task<*>
 
     val valueSubscribersMutex = Mutex()
-    var valueSubscribers = mutableListOf<TaskSubscriberFunction<T>>()
+    var valueSubscribers = mutableListOf<SubscriberFunction<T>>()
     val channel = TaskChannel(this)
 
-    var destructionHandlers = mutableListOf<TaskDestructionFunction<T>>().apply {
+    var destructionHandlers = mutableListOf<DestructionFunction<T>>().apply {
         add {
             channel.cancel()
         }
     }
     var destructionHandlersMutex = Mutex()
 
-    var value: TaskValue<T> by Delegates.vetoable(initialValue) { _, oldValue, newValue ->
+    var value: Value<T> by Delegates.vetoable(initialValue) { _, oldValue, newValue ->
         // TODO: use channels to offload new value so current thread is freed up
         if (!oldValue.isStableValue() && oldValue != newValue) {
             println("${fullID()} old value = $oldValue, new value = $newValue")
@@ -117,7 +121,7 @@ class Task<T>(val taskName: String, val initialValue: TaskValue<T> = null, val w
         this@Task.work(value)
     }
 
-    fun subscribe(emitNoValue: Boolean = false, f: TaskSubscriberFunction<T>) {
+    fun subscribe(emitNoValue: Boolean = false, f: SubscriberFunction<T>) {
         runBlocking {
             valueSubscribersMutex.withLock {
                 valueSubscribers.add(f)
@@ -127,7 +131,7 @@ class Task<T>(val taskName: String, val initialValue: TaskValue<T> = null, val w
         if (emitNoValue || !value.isNoValue()) this.f(value)
     }
 
-    fun subscribeWithoutInitialValue(f: TaskSubscriberFunction<T>) {
+    fun subscribeWithoutInitialValue(f: SubscriberFunction<T>) {
         runBlocking {
             valueSubscribersMutex.withLock {
                 valueSubscribers.add(f)
@@ -135,7 +139,7 @@ class Task<T>(val taskName: String, val initialValue: TaskValue<T> = null, val w
         }
     }
 
-    suspend fun sendEvent(event: TaskEvent) {
+    suspend fun sendEvent(event: Event) {
         println("sending event $event to ${fullID()}")
         channel.send(event)
         println("sent event $event to ${fullID()}")
@@ -160,7 +164,7 @@ class Task<T>(val taskName: String, val initialValue: TaskValue<T> = null, val w
         }
     }
 
-    fun registerDestructionHandler(f: TaskDestructionFunction<T>) {
+    fun registerDestructionHandler(f: DestructionFunction<T>) {
         runBlocking {
             destructionHandlersMutex.withLock {
                 destructionHandlers.add(f)
