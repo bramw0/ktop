@@ -20,7 +20,6 @@ import androidx.compose.ui.window.awaitApplication
 import kotlinx.coroutines.runBlocking
 import net.bramw.kotlintopmp.ktop.Task
 import net.bramw.kotlintopmp.ktop.Event
-import net.bramw.kotlintopmp.ktop.TaskExecutor
 import net.bramw.kotlintopmp.ktop.Value
 import net.bramw.kotlintopmp.ktop.UserAction
 import net.bramw.kotlintopmp.ktop.fullID
@@ -187,32 +186,32 @@ object UI {
         if (!shown) {
             shown = true
 
-            task = TaskExecutor.startTask {
-                awaitApplication {
-                    if (isOpen.value) {
-                        Window(
-                            onCloseRequest = ::exitApplication, onKeyEvent = { event ->
-                                val removedListeners = mutableListOf<KeyPressListener>()
-
-                                val handled = keyPressListeners.map {
-                                    val result = it(event)
-                                    if (result.removeListener) removedListeners.add(it)
-                                    result.handled
-                                }.all {
-                                    it
-                                }
-                                keyPressListeners.removeAll(removedListeners)
-                                handled
-                            }) {
-                            LazyColumn {
-                                items(windows) { window ->
-                                    window.content(this)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+//            task = TaskExecutor.startTask {
+//                awaitApplication {
+//                    if (isOpen.value) {
+//                        Window(
+//                            onCloseRequest = ::exitApplication, onKeyEvent = { event ->
+//                                val removedListeners = mutableListOf<KeyPressListener>()
+//
+//                                val handled = keyPressListeners.map {
+//                                    val result = it(event)
+//                                    if (result.removeListener) removedListeners.add(it)
+//                                    result.handled
+//                                }.all {
+//                                    it
+//                                }
+//                                keyPressListeners.removeAll(removedListeners)
+//                                handled
+//                            }) {
+//                            LazyColumn {
+//                                items(windows) { window ->
+//                                    window.content(this)
+//                                }
+//                            }
+//                        }
+//                    }
+//                }
+//            }
         }
     }
 }
