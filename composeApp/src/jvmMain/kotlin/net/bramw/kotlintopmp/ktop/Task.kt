@@ -25,7 +25,7 @@ class Task<T>(var id: Int, var taskName: String, var initialValue: Value<T> = nu
     lateinit var parent: Task<*>
 
     val valueSubscribersMutex = Mutex()
-    var valueSubscribers = mutableListOf<Task<*>>()
+    var valueSubscribers = mutableSetOf<Task<*>>()
 
     val channel: Channel<Event> = Channel(UNLIMITED)
 

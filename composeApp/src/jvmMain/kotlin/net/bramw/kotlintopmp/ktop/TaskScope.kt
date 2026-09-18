@@ -4,6 +4,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.job
 import kotlinx.coroutines.joinAll
+import kotlinx.coroutines.launch
 import net.bramw.kotlintopmp.ktop.Event.*
 import kotlin.concurrent.atomics.AtomicInt
 import kotlin.concurrent.atomics.ExperimentalAtomicApi
@@ -11,10 +12,10 @@ import kotlin.concurrent.atomics.fetchAndIncrement
 
 
 suspend fun taskScope(block: suspend TaskScope.() -> Unit) {
-    val scope = TaskScope()
-    scope.block()
+    val tScope = TaskScope()
+    tScope.block()
     // Wait until all children jobs have completed
-    scope.scope.coroutineContext.job.children.toList().joinAll()
+    tScope.scope.coroutineContext.job.children.toList().joinAll()
 }
 
 class TaskScope {
@@ -39,15 +40,21 @@ class TaskScope {
         return createTask(initialValue = stableValue(v)) {}
     }
 
-    fun start(task: Task<*>) {
-        task.start(scope)
+    suspend fun start(vararg tasks: Task<*>) {
+        tasks.map {
+            scope.launch {
+                it.start(scope)
+            }
+        }.joinAll()
     }
 
-    fun start(tasks: Collection<Task<*>>) {
-        tasks.forEach { start(it) }
-    }
+//    infix fun <T, V> Task<T>.trans(f: (Value<T>) -> Value<V>): Task<V> {
+//        return this trans { event: ValueChanged<T> ->
+//            f(event.value)
+//        }
+//    }
 
-    infix fun <T, V> Task<T>.trans(f: (Value<T>) -> Value<V>): Task<V> {
+    infix fun <T, V> Task<T>.trans(f: (ValueChanged<T>) -> Value<V>): Task<V> {
         return createTask {
             val lhs = this@trans
             lhs.subscribe(this)
@@ -62,7 +69,7 @@ class TaskScope {
                     }
 
                     is ValueChanged<*> -> {
-                        this.value = f(event.value as Value<T>)
+                        this.value = f(event as ValueChanged<T>)
                     }
 
                     else -> {
@@ -73,9 +80,9 @@ class TaskScope {
         }
     }
 
-    infix fun <T> Task<T>.parOr(other: Task<T>): Task<T> {
+    infix fun <T> Task<T>.or(other: Task<T>): Task<T> {
         return createTask {
-            val lhs = this@parOr
+            val lhs = this@or
 
             lhs.subscribe(this)
             lhs.start(scope)
@@ -139,9 +146,9 @@ class TaskScope {
         }
     }
 
-    infix fun <T, V> Task<T>.parAnd(other: Task<V>): Task<Pair<T, V>> {
+    infix fun <T, V> Task<T>.and(other: Task<V>): Task<Pair<T, V>> {
         return createTask {
-            val lhs = this@parAnd
+            val lhs = this@and
 
             lhs.subscribe(this)
             lhs.start(scope)
