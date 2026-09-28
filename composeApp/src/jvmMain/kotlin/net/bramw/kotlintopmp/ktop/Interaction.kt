@@ -52,6 +52,17 @@ fun <T, V> onValue(block: Pred<T, V>.() -> Unit): Continuation.OnValue<T, Task<V
     return Continuation.OnValue(Pred(block).asFunction())
 }
 
+fun <T, V> ifStable(block: Pred<T, V>.(T) -> Task<V>): Continuation.OnValue<T, Task<V>> {
+    return onValue {
+        pred {
+            it.isStableValue()
+        }
+        then { value ->
+            block(value!!.first)
+        }
+    }
+}
+
 fun <T, V> onAction(action: UserAction, block: Pred<T, V>.() -> Unit): Continuation.OnAction<T, Task<V>> {
     return Continuation.OnAction(action, Pred(block).asFunction())
 }

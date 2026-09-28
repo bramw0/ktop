@@ -39,6 +39,9 @@ class TaskScope {
     fun <T> pure(v: T): Task<T> {
         return createTask(initialValue = stableValue(v)) {}
     }
+    fun <T> pure(f: () -> T): Task<T> {
+        return createTask(initialValue = stableValue(f())) {}
+    }
 
     suspend fun start(vararg tasks: Task<*>) {
         tasks.map {
@@ -54,6 +57,7 @@ class TaskScope {
 //        }
 //    }
 
+	// Check in TopHat and iTasks whether stability of resulting trans task should always be the same as the receiver task (that it transforms)
     infix fun <T, V> Task<T>.trans(f: (ValueChanged<T>) -> Value<V>): Task<V> {
         return createTask {
             val lhs = this@trans
@@ -80,6 +84,7 @@ class TaskScope {
         }
     }
 
+	// TODO: refactor this to use a general `parallel` combinator and adhere to the iTasks implementation and the draft?
     infix fun <T> Task<T>.or(other: Task<T>): Task<T> {
         return createTask {
             val lhs = this@or
@@ -146,6 +151,7 @@ class TaskScope {
         }
     }
 
+	// TODO: refactor this to use a general `parallel` combinator and adhere to the iTasks implementation and the draft?
     infix fun <T, V> Task<T>.and(other: Task<V>): Task<Pair<T, V>> {
         return createTask {
             val lhs = this@and
@@ -244,6 +250,10 @@ class TaskScope {
                 }
             }
         }
+    }
+
+    infix fun <T, V> Task<T>.step(rhs: Continuation<T, Task<V>>): Task<V> {
+        return this step listOf(rhs)
     }
 
     infix fun <T, V> Task<T>.step(rhs: Collection<Continuation<T, Task<V>>>): Task<V> {
