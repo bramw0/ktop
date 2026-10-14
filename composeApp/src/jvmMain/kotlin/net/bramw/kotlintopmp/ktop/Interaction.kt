@@ -6,11 +6,13 @@ enum class UserAction {
     Continue,
 }
 
-sealed class Event {
-    data class ValueChanged<T>(val taskId: Int, val value: Value<T>) : Event()
-    data class UserKeyPressed(val key: Key) : Event()
-    data class Action(val action: UserAction) : Event()
-    data object Stop : Event()
+sealed class Event(val name: String) {
+    data class ValueChanged<T>(val taskId: Int, val value: Value<T>) : Event("ValueChanged")
+    data class UserKeyPressed(val key: Key) : Event("UserKeyPressed")
+    data class Action(val action: UserAction) : Event("Action")
+    data class DoStep<T>(val newTask: Task<T>, val causedByStableValue: Boolean) : Event("DoStep")
+
+    data object Stop : Event("Stop")
 }
 
 class Pred<T, V>(block: Pred<T, V>.() -> Unit) {
@@ -59,6 +61,28 @@ fun <T, V> ifStable(block: Pred<T, V>.(T) -> Task<V>): Continuation.OnValue<T, T
         }
         then { value ->
             block(value!!.first)
+        }
+    }
+}
+
+fun <T, V> ifUnstable(block: Pred<T, V>.(T) -> Task<V>): Continuation.OnValue<T, Task<V>> {
+    return onValue {
+        pred {
+            it.isUnstableValue()
+        }
+        then { value ->
+            block(value!!.first)
+        }
+    }
+}
+
+fun <T, V> ifNoValue(block: Pred<T, V>.() -> Task<V>): Continuation.OnValue<T, Task<V>> {
+    return onValue {
+        pred {
+            it.isNoValue()
+        }
+        then {
+            block()
         }
     }
 }

@@ -9,7 +9,6 @@ import kotlinx.coroutines.sync.withLock
 import kotlin.properties.Delegates
 
 
-
 typealias WorkFunction<T> = suspend Task<T>.() -> Unit
 private typealias DestructionFunction<T> = Task<T>.() -> Unit
 
@@ -47,11 +46,7 @@ class Task<T>(var id: Int, var taskName: String, var initialValue: Value<T> = nu
             }
 
             if (newValue.isStableValue()) {
-                runBlocking {
-                    sendEvent(Event.Stop)
-                }
-                // TODO: do we still need to cancel the channel?
-                channel.cancel()
+                sendEvent(Event.Stop)
             }
 
             return@vetoable true
@@ -60,9 +55,8 @@ class Task<T>(var id: Int, var taskName: String, var initialValue: Value<T> = nu
         }
     }
 
-
     init {
-        println("Created task ${fullID()}")
+//        println("Created task ${fullID()}")
     }
 
     suspend fun evaluate() {
@@ -84,8 +78,14 @@ class Task<T>(var id: Int, var taskName: String, var initialValue: Value<T> = nu
         if (emitNoValue || !value.isNoValue()) t.sendEvent(Event.ValueChanged(id, value))
     }
 
-    suspend fun sendEvent(event: Event) {
-        channel.send(event)
+    fun sendEvent(event: Event) {
+        val result = channel.trySend(event)
+        if (result.isClosed) {
+            println("Could not send event $event to task $id, reason: ${result.exceptionOrNull()}")
+        } else {
+            println("Sent event $event to task $id")
+        }
+//        channel.send(event)
     }
 
     fun start(scope: CoroutineScope, relaunch: Boolean = false) {
@@ -95,7 +95,7 @@ class Task<T>(var id: Int, var taskName: String, var initialValue: Value<T> = nu
                 this.value = initialValue
             }
 
-            handle = scope.launch(start = CoroutineStart.LAZY) {
+            handle = scope.launch(CoroutineName("$id: $taskName"), start = CoroutineStart.LAZY) {
                 this@Task.evaluate()
             }
         }

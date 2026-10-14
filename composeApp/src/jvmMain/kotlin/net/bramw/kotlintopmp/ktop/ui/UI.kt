@@ -1,28 +1,28 @@
 package net.bramw.kotlintopmp
 
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyItemScope
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.runtime.*
-import androidx.compose.ui.input.key.Key
-import androidx.compose.ui.input.key.KeyEvent
-import androidx.compose.ui.input.key.KeyEventType
-import androidx.compose.ui.input.key.key
-import androidx.compose.ui.input.key.type
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.input.key.*
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.awaitApplication
 import kotlinx.coroutines.runBlocking
-import net.bramw.kotlintopmp.ktop.Task
-import net.bramw.kotlintopmp.ktop.Event
-import net.bramw.kotlintopmp.ktop.Value
-import net.bramw.kotlintopmp.ktop.UserAction
-import net.bramw.kotlintopmp.ktop.fullID
+import net.bramw.kotlintopmp.ktop.*
+
+suspend fun <T> showMainWindow(value: T) {
+    awaitApplication {
+        Window(onCloseRequest = ::exitApplication) {
+            Text(value.toString())
+        }
+    }
+}
 
 interface Display {
     fun display(): String
