@@ -182,6 +182,16 @@ class Const<R>(val value: R) : ReadOnlyShared<R>() {
     }
 }
 
+class InMemorySDS<R>(var value: R) : Shared<R>() {
+    override suspend fun read(): R {
+        return value
+    }
+
+    override suspend fun write(newValue: R) {
+        value = newValue
+    }
+}
+
 object CurrentTime : ReadOnlyShared<LocalDateTime>() {
     override suspend fun read(): LocalDateTime {
         return Clock.System.now().toLocalDateTime(TimeZone.currentSystemDefault())

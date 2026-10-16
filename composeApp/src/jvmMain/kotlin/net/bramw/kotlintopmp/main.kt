@@ -6,7 +6,6 @@ import kotlinx.datetime.LocalDate
 import kotlinx.datetime.plus
 import net.bramw.kotlintopmp.ktop.*
 import net.bramw.kotlintopmp.ktop.sds.*
-import kotlin.collections.listOf
 import kotlin.time.Duration.Companion.milliseconds
 
 fun log(name: String): (Event.ValueChanged<*>) -> Value<*> {
@@ -182,8 +181,9 @@ suspend fun main() {
             repeat()
         }
 
-//        val uiTest = viewInformation(5)
-//        val uiTest2 = viewInformation(10)
+        // TODO: should we stop every UI task upon closing of the main UI window? If so, how do we correctly propagate up the task tree that every UI task has stopped?
+        val uiTest = viewInformation(5)
+        val uiTest2 = viewInformation(10)
 
         start(
             d trans log("d"),
@@ -192,7 +192,8 @@ suspend fun main() {
             newD trans log("newD"),
             a trans log("a"),
 //            sdsTester trans log("sdsTester"),
-//            uiTest trans log("uiTest"),
+            uiTest trans log("uiTest"),
+            uiTest2 trans log("uiTest2"),
         )
     }
 

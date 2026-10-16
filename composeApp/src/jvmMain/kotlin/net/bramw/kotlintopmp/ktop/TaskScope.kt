@@ -1,8 +1,10 @@
 package net.bramw.kotlintopmp.ktop
 
+import androidx.compose.material.Text
 import kotlinx.coroutines.*
 import net.bramw.kotlintopmp.ktop.Event.*
-import net.bramw.kotlintopmp.showMainWindow
+import net.bramw.kotlintopmp.ktop.ui.App.addWindow
+import net.bramw.kotlintopmp.ktop.ui.App.show
 import kotlin.concurrent.atomics.AtomicInt
 import kotlin.concurrent.atomics.ExperimentalAtomicApi
 import kotlin.concurrent.atomics.fetchAndIncrement
@@ -70,7 +72,8 @@ class TaskScope {
 //        }
 //    }
 
-    // Check in TopHat and iTasks whether stability of resulting trans task should always be the same as the receiver task (that it transforms)
+    // TODO: Check in TopHat and iTasks whether stability of resulting trans task should always be the same as the receiver task (that it transforms)
+    // yes! keep stability
     infix fun <T, V> Task<T>.trans(f: (ValueChanged<T>) -> Value<V>): Task<V> {
         return createTask {
             val lhs = this@trans
@@ -80,7 +83,7 @@ class TaskScope {
             for (event in this.channel) {
                 when (event) {
                     is Stop -> handleStop {
-                        // TODO: should canceling be done when a task has a stable value if the task itself still has an active parent?
+                        // TODO: should canceling be done when a task has a stable value (by sending Stop to itself) if the task itself still has an active parent?
                         println("task $id: processing Stop")
                         lhs.removeSubscriber(this)
                         lhs.sendEvent(event)
@@ -349,10 +352,19 @@ class TaskScope {
     fun <T> viewInformation(value: T): Task<T> {
         return createTask {
             this.value = unstableValue(value)
-            showMainWindow(value)
+            addWindow {
+                Text(value.toString())
+            }
+            show()
+
+            for (event in channel) {
+                when (event) {
+                    is Stop -> handleStop {
+                    }
+                    else -> {}
+                }
+            }
         }
     }
-
-
 }
 
