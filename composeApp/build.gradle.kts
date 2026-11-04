@@ -31,6 +31,8 @@ kotlin {
             implementation(libs.kotlinx.coroutines)
             implementation(libs.kotlin.reflect)
             implementation(libs.kotlinx.datetime)
+
+            implementation("dev.nucleusframework:composenativetray:2.1.6")
         }
     }
 }

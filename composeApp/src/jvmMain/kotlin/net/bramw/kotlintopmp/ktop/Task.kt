@@ -1,6 +1,7 @@
 package net.bramw.kotlintopmp.ktop
 
-import androidx.compose.ui.input.key.Key
+import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.mutableStateOf
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.Channel.Factory.UNLIMITED
@@ -12,16 +13,27 @@ import kotlin.properties.Delegates
 typealias WorkFunction<T> = suspend Task<T>.() -> Unit
 private typealias DestructionFunction<T> = Task<T>.() -> Unit
 
-fun <T> Task<T>?.fullID(): String {
-    return "(${this?.id} - ${this?.taskName} - ${this?.value})"
+enum class TaskKind {
+    PureConst, PureValue, PureExpr, Transform, And, Or, OrLeft, OrRight, Step, Watch, Get, Set, Update, Custom
 }
 
 // What are the consequences of assigning an id to every running task, or every created task (that may never run at all)?
-class Task<T>(var id: Int, var taskName: String, var initialValue: Value<T> = null, var work: WorkFunction<T>) {
+class Task<T : Any>(
+    var id: Int,
+    var taskName: String,
+    var initialValue: Value<T>? = null,
+    val kind: TaskKind = TaskKind.Custom,
+    var work: WorkFunction<T>
+) {
     // Reference to Task lifecycle?
     lateinit var handle: Job
 
     lateinit var parent: Task<*>
+    fun hasParent(): Boolean = ::parent.isInitialized
+
+    lateinit var runningTasksHandler: (Throwable?) -> Unit
+
+    var started: MutableState<Boolean> = mutableStateOf(false)
 
     val valueSubscribersMutex = Mutex()
     var valueSubscribers = mutableSetOf<Task<*>>()
@@ -35,7 +47,7 @@ class Task<T>(var id: Int, var taskName: String, var initialValue: Value<T> = nu
     }
     var destructionHandlersMutex = Mutex()
 
-    var value: Value<T> by Delegates.vetoable(initialValue) { _, oldValue, newValue ->
+    var value: Value<T>? by Delegates.vetoable(initialValue) { _, oldValue, newValue ->
         if (!oldValue.isStableValue() && oldValue != newValue) {
             runBlocking {
                 valueSubscribersMutex.withLock {
@@ -45,7 +57,7 @@ class Task<T>(var id: Int, var taskName: String, var initialValue: Value<T> = nu
                 }
             }
 
-            if (newValue.isStableValue()) {
+            if (newValue.isStableValue() && !this::parent.isInitialized) {
                 sendEvent(Event.Stop)
             }
 
@@ -53,10 +65,6 @@ class Task<T>(var id: Int, var taskName: String, var initialValue: Value<T> = nu
         } else {
             return@vetoable false
         }
-    }
-
-    init {
-//        println("Created task ${fullID()}")
     }
 
     suspend fun evaluate() {
@@ -83,9 +91,8 @@ class Task<T>(var id: Int, var taskName: String, var initialValue: Value<T> = nu
         if (result.isClosed) {
             println("Could not send event $event to task $id, reason: ${result.exceptionOrNull()}")
         } else {
-            println("Sent event $event to task $id")
+            println("Sent event ${event.name}=$event to task $id")
         }
-//        channel.send(event)
     }
 
     fun start(scope: CoroutineScope, relaunch: Boolean = false) {
@@ -98,9 +105,14 @@ class Task<T>(var id: Int, var taskName: String, var initialValue: Value<T> = nu
             handle = scope.launch(CoroutineName("$id: $taskName"), start = CoroutineStart.LAZY) {
                 this@Task.evaluate()
             }
+
+            if (this::runningTasksHandler.isInitialized) {
+                handle.invokeOnCompletion(runningTasksHandler)
+            }
         }
 
         handle.start()
+        started.value = true
     }
 
     fun registerDestructionHandler(f: DestructionFunction<T>) {

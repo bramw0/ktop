@@ -5,6 +5,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.yield
 import kotlinx.datetime.LocalDateTime
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
@@ -34,17 +35,19 @@ private suspend fun <R, OR> composedRead(lhs: ReadWriteShared<R, *>, rhs: ReadWr
 
 // TODO: should we launch this on the task scope or use a separate coroutinescope for non-task coroutines?
 context(ts: TaskScope)
-private suspend fun <W, OW> composedWrite(lhs: ReadWriteShared<*, W>, rhs: ReadWriteShared<*, OW>, newValue: Pair<W, OW>) {
+private suspend fun <W, OW> composedWrite(
+    lhs: ReadWriteShared<*, W>, rhs: ReadWriteShared<*, OW>, newValue: Pair<W, OW>
+) {
     lhs.lock.withLock {
         rhs.lock.withLock {
 //            println("lhs: writing ${newValue.first}")
             val thisWriter = ts.scope.launch(CoroutineName("lhs composed writer")) {
-                lhs.write(newValue.first)
+                lhs.writeWithMessage(newValue.first)
             }
 
 //            println("rhs: writing ${newValue.second}")
             val otherWriter = ts.scope.launch(CoroutineName("rhs composed writer")) {
-                rhs.write(newValue.second)
+                rhs.writeWithMessage(newValue.second)
             }
 
             thisWriter.join()
@@ -66,29 +69,58 @@ private suspend fun <R, W> defaultRead(rws: ReadWriteShared<R, W>): R {
     }
 }
 
-private suspend fun <R, W, T> projectedWrite(rws: ReadWriteShared<R, W>, newValue: T, f: (T, R?) -> W?, hasPreviousValue: Boolean = true) {
+private suspend fun <R, W, T> projectedWrite(
+    rws: ReadWriteShared<R, W>, newValue: T, f: (T, R?) -> W?, hasPreviousValue: Boolean = true
+) {
     rws.lock.withLock {
         val v = if (hasPreviousValue) rws.read() else null
 
         f(newValue, v)?.let {
-            rws.write(it)
+            rws.writeWithMessage(it)
         }
     }
 }
 
 private suspend fun <R, W> defaultWrite(rws: ReadWriteShared<R, W>, newValue: W) {
     rws.lock.withLock {
-        rws.write(newValue)
+        rws.writeWithMessage(newValue)
     }
 }
 
-
-abstract class ReadWriteShared<R, W>() {
+abstract class ReadWriteShared<R, W> {
     val lock: Mutex = Mutex(false)
+    val valueSubscribers = mutableSetOf<Task<*>>()
+    val valueSubscribersMutex = Mutex(false)
 
     abstract suspend fun write(newValue: W)
 
     abstract suspend fun read(): R
+
+    open suspend fun writeWithMessage(newValue: W) {
+        write(newValue)
+        valueSubscribersMutex.withLock {
+            valueSubscribers.forEach { it.sendEvent(Event.SDS.Publish) }
+        }
+    }
+
+    open suspend fun readAsMessage(task: Task<*>) {
+        val value = read()
+        task.sendEvent(Event.SDS.ValueChanged(value))
+    }
+
+    internal suspend fun subscribe(task: Task<*>) {
+        valueSubscribersMutex.withLock {
+            valueSubscribers.add(task)
+        }
+
+        readAsMessage(task)
+    }
+
+    internal suspend fun removeSubscriber(task: Task<*>) {
+        valueSubscribersMutex.withLock {
+            valueSubscribers.remove(task)
+        }
+    }
 
     open fun <T> withRead(f: (R) -> T): ReadWriteShared<T, W> {
         return object : ReadWriteShared<T, W>() {
@@ -137,8 +169,12 @@ abstract class ReadWriteShared<R, W>() {
 //typealias ReadOnlyShared<R> = ReadWriteShared<R, Unit>
 
 abstract class ReadOnlyShared<R> : ReadWriteShared<R, Nothing>() {
-    override suspend fun write(newValue: Nothing): Nothing = error("Trying to write to read-only share")
-    override fun <T> withWrite(f: (newValue: T, oldValue: R?) -> Nothing?): Nothing = error("Trying to write to read-only share")
+    override suspend fun write(newValue: Nothing): Nothing = error("Trying to call write() to read-only share")
+    override fun <T> withWrite(f: (newValue: T, oldValue: R?) -> Nothing?): Nothing =
+        error("Trying to call withWrite() to read-only share")
+
+    override suspend fun writeWithMessage(newValue: Nothing) =
+        error("Trying to call writeWithMessage() on read-only share")
 
     override fun <T> withRead(f: (R) -> T): ReadOnlyShared<T> {
         return object : ReadOnlyShared<T>() {
@@ -157,12 +193,15 @@ abstract class ReadOnlyShared<R> : ReadWriteShared<R, Nothing>() {
 // TODO: Should you be able to compose a ReadOnlyShared and ReadWriteShared together? Should you be able to write to the combined SDS, but only give one of the two values since the other does not support writing? Yes! Since ReadOnlyShared<R> == ReadWriteShared<R, Nothing> this should just work and should not be treated as different types.
 
 abstract class WriteOnlyShared<W> : ReadWriteShared<Nothing, W>() {
-    override suspend fun read(): Nothing = error("Trying to read from write-only share")
-    override fun <T> withRead(f: (Nothing) -> T): Nothing = error("Trying to read from write-only share")
+    override suspend fun read(): Nothing = error("Trying to call read() on write-only share")
+    override fun <T> withRead(f: (Nothing) -> T): Nothing = error("Trying to call withRead() on write-only share")
+    override suspend fun readAsMessage(task: Task<*>): Nothing =
+        error("Trying to call readAsMessage() on write-only share")
 
     override fun <T> withWrite(f: (newValue: T, oldValue: Nothing?) -> W?): WriteOnlyShared<T> {
         return object : WriteOnlyShared<T>() {
-            override suspend fun write(newValue: T) = projectedWrite(this@WriteOnlyShared, newValue, f, hasPreviousValue = false)
+            override suspend fun write(newValue: T) =
+                projectedWrite(this@WriteOnlyShared, newValue, f, hasPreviousValue = false)
         }
     }
 
@@ -182,7 +221,7 @@ class Const<R>(val value: R) : ReadOnlyShared<R>() {
     }
 }
 
-class InMemorySDS<R>(var value: R) : Shared<R>() {
+class InMemorySDS<R>(private var value: R) : Shared<R>() {
     override suspend fun read(): R {
         return value
     }
@@ -202,44 +241,113 @@ object Null : WriteOnlyShared<Unit>() {
     override suspend fun write(newValue: Unit) {}
 }
 
-
-fun <R> TaskScope.get(sds: ReadWriteShared<R, *>): Task<R> {
-    return createTask {
+fun <R : Any> TaskScope.watch(sds: ReadWriteShared<R, *>): Task<R> {
+    return createTask(kind = TaskKind.Watch) {
         sds.lock.withLock {
-            val value = sds.read()
-            this.value = stableValue(value)
+            sds.subscribe(this)
+        }
+
+        for (event in channel) {
+            when (event) {
+                is Event.Stop -> handleStop {
+                    sds.removeSubscriber(this)
+                }
+                is Event.SDS.Publish -> {
+                    sds.lock.withLock {
+                        sds.readAsMessage(this)
+                    }
+                }
+                is Event.SDS.ValueChanged<*> -> {
+                    val value = event.value as R
+                    this.value = unstableValue(value)
+                }
+
+                else -> {}
+            }
+
+            yield()
         }
     }
 }
 
-fun <W> TaskScope.set(sds: ReadWriteShared<*, W>, newValue: W): Task<W> {
-    return createTask {
+fun <R : Any> TaskScope.get(sds: ReadWriteShared<R, *>): Task<R> {
+    return createTask(kind = TaskKind.Get) {
+        // TODO: is it okay for the SDS value to change after sending the message to this task and before it has received it and constructed its task value? Or do we need to obtain the lock for the whole get function, like in update?
         sds.lock.withLock {
-            sds.write(newValue)
-            this.value = stableValue(newValue)
+            sds.readAsMessage(this)
+        }
+
+        for (event in channel) {
+            when (event) {
+                is Event.Stop -> handleStop {}
+                is Event.SDS.ValueChanged<*> -> {
+                    this.value = stableValue(event.value as R)
+                    break
+                }
+
+                else -> {}
+            }
+
+            yield()
+        }
+
+//        sds.lock.withLock {
+//            val value = sds.read()
+//            this.value = stableValue(value)
+//        }
+    }
+}
+
+fun <W : Any> TaskScope.set(sds: ReadWriteShared<*, W>, newValue: W): Task<W> {
+    return createTask(kind = TaskKind.Set) {
+        sds.lock.withLock {
+            sds.writeWithMessage(newValue)
+            this@createTask.value = stableValue(newValue)
+        }
+
+        for (event in channel) {
+            if (event is Event.Stop) {
+                handleStop {}
+            }
+
+            yield()
         }
     }
 }
 
-fun <R, W> TaskScope.update(sds: ReadWriteShared<R, W>, f: (R) -> W): Task<W> {
-    return createTask {
+fun <R, W : Any> TaskScope.update(sds: ReadWriteShared<R, W>, f: (R) -> W): Task<W> {
+    return createTask(kind = TaskKind.Update) {
         sds.lock.withLock {
-            val newValue = f(sds.read())
-            sds.write(newValue)
-            this.value = stableValue(newValue)
+            sds.readAsMessage(this@createTask)
+
+            for (event in channel) {
+                when (event) {
+                    is Event.Stop -> handleStop {}
+                    is Event.SDS.ValueChanged<*> -> {
+                        val newValue = f(event.value as R)
+                        sds.writeWithMessage(newValue)
+                        this@createTask.value = stableValue(newValue)
+                        break
+                    }
+
+                    else -> {}
+                }
+
+                yield()
+            }
         }
+
+
+//        sds.lock.withLock {
+//            val newValue = f(sds.read())
+//            sds.write(newValue)
+//            this.value = stableValue(newValue)
+//        }
     }
 }
 
-fun <R, T> withShared(initialValue: R, block: (Shared<R>) -> Task<T>): Task<T> {
-    val s = object : Shared<R>() {
-        var value = initialValue
-        override suspend fun read(): R = value
-
-        override suspend fun write(newValue: R) {
-            value = newValue
-        }
-    }
+fun <R, T : Any> withShared(initialValue: R, block: (Shared<R>) -> Task<T>): Task<T> {
+    val s = InMemorySDS(initialValue)
     return block(s)
 }
 

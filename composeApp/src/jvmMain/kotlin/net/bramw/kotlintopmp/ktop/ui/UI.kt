@@ -1,78 +1,223 @@
 package net.bramw.kotlintopmp.ktop.ui
 
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyItemScope
 import androidx.compose.foundation.lazy.items
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.mutableStateListOf
-import androidx.compose.runtime.mutableStateOf
+import androidx.compose.material.Button
+import androidx.compose.material.Text
+import androidx.compose.runtime.*
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.input.key.*
-import androidx.compose.ui.window.ApplicationScope
-import androidx.compose.ui.window.Window
-import androidx.compose.ui.window.awaitApplication
+import androidx.compose.ui.window.*
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import net.bramw.kotlintopmp.ktop.*
-import kotlin.concurrent.atomics.AtomicBoolean
+import net.bramw.kotlintopmp.ktop.sds.ReadWriteShared
+import net.bramw.kotlintopmp.ktop.sds.watch
+import net.bramw.kotlintopmp.ktop.sds.withShared
 import kotlin.concurrent.atomics.ExperimentalAtomicApi
+import kotlin.reflect.typeOf
+import dev.nucleusframework.composenativetray.tray.api.Tray as NucleusTray
 
-object App {
-    private data class Window(val task: Task<*>, val content: @Composable LazyItemScope.() -> Unit)
+// TODO: convert to generic version as every viewInformation will have the same content except for Int::class
 
+//fun <T : Any> TaskScope._baseViewInformation(value: T, signature: TaskSignature<T>): Task<T> {
+//    return withShared(value) {
+//        viewSharedInformation(it).also { t ->
+//            t.signature = signature.apply { task = t}
+//            t.runningTasksHandler = { runningTasksTask.sendEvent(Event.RemoveRunningTask(t.signature)) }
+//            runningTasksTask.sendEvent(Event.AddRunningTask(t.signature))
+//        }
+//    }
+//}
+//
+//fun TaskScope.viewInformation(value: Int): Task<Int> {
+//    return _baseViewInformation(value, TaskSignature.SingleTaskSignature(Int::class))
+//}
+//
+//fun TaskScope.viewInformation(value: String): Task<String> {
+//    return _baseViewInformation(value, TaskSignature.SingleTaskSignature(String::class))
+//}
+//
+//inline fun <reified T : Any> TaskScope.viewInformation(value: Collection<T>): Task<Collection<T>> {
+//    return _baseViewInformation(value, TaskSignature.CollectionTaskSignature(T::class))
+//}
+//
+//inline fun <reified K : Any, reified V : Any> TaskScope.viewInformation(value: Map<K, V>): Task<Map<K, V>> {
+//    return _baseViewInformation(value, TaskSignature.MapTaskSignature(K::class, V::class))
+//}
+//
+//inline fun <reified A : Any, reified B : Any> TaskScope.viewInformation(value: Pair<A, B>): Task<Pair<A, B>> {
+//    return _baseViewInformation(value, TaskSignature.PairTaskSignature(A::class, B::class))
+//}
+
+inline fun <reified T : Any> TaskScope.viewInformation(value: T): Task<T> {
+    return withShared(value) {
+        viewSharedInformation<T>(it)
+    }
+}
+
+// TODO: somehow change this such that the running task is only sent when the task is actually started, but such that it also contains the correct task in its signature (circular dependency?)
+inline fun <reified R : Any> TaskScope.viewSharedInformation(sds: ReadWriteShared<R, *>): Task<R> {
+    return watch(sds).also { t ->
+        val signature = TaskSignature(typeOf<R>(), t)
+        t.runningTasksHandler = { systemTasks.runningTasksTask.sendEvent(Event.RunningTask.Remove(signature)) }
+        // TODO: this will only send the watch(sds) task to the running task list; should this be transformed to the highest parent? But the parent is not yet available in the step if it is created in a continuation...
+        systemTasks.runningTasksTask.sendEvent(Event.RunningTask.Add(signature))
+    }
+}
+
+typealias UIContentFun = @Composable LazyItemScope.() -> Unit
+data class Window(val task: Task<*>, val content: UIContentFun)
+
+class App(val ts: TaskScope) {
     private var started = false
     private val startedMutex = Mutex(false)
-    private val isOpen = mutableStateOf(true)
-    private val windows = mutableStateListOf<Window>()
-
-    fun Task<*>.addWindow(content: @Composable LazyItemScope.() -> Unit) {
-        windows.add(Window(this, content))
-    }
+    private val isVisible = mutableStateOf(true)
+    private val wantsToQuit = mutableStateOf(false)
+    internal val windows = mutableStateListOf<Window>()
 
     private fun handleKeyEvent(event: KeyEvent): Boolean {
-        if (event.type == KeyEventType.KeyUp && (event.key == Key.Escape || event.key == Key.Enter || event.key == Key.Q)) {
-            isOpen.value = false
+        if (event.type == KeyEventType.KeyUp && event.key == Key.Escape) {
+            isVisible.value = false
             return true
         }
         return false
     }
 
     private fun ApplicationScope.exit() {
-        windows.forEach {
-            it.task.sendEvent(Event.Stop)
-        }
+//        windows.forEach {
+//            it.task.sendEvent(Event.Stop)
+//        }
         exitApplication()
     }
 
-    context(ts: TaskScope)
-    val task: Task<Nothing>
-        get() = ts.createTask {
-            awaitApplication {
-                if (isOpen.value) {
-                    Window(onCloseRequest = { exit() }, onKeyEvent = ::handleKeyEvent) {
-                        LazyColumn {
-                            items(windows) { it.content(this) }
+    private val trayIcon = object : Painter() {
+        override val intrinsicSize = Size(256f, 256f)
+
+        override fun DrawScope.onDraw() {
+            drawOval(Color.Green)
+        }
+    }
+
+    @OptIn(ExperimentalAtomicApi::class)
+    @Composable
+    context(t: Task<Nothing>)
+    fun ApplicationScope.DisplayApp() = with(t) {
+        val scope = rememberCoroutineScope()
+        LaunchedEffect(Unit) {
+            for (event in channel) {
+                if (event is Event.Stop) handleStop {
+                    println("UI received stop, exiting")
+                    exitApplication()
+                }
+            }
+        }
+        if (!wantsToQuit.value) {
+            Window(onCloseRequest = {
+                val count = ts.systemTasks.runningTasksCount.load()
+                if (count > 0) isVisible.value = false
+                else exitApplication()
+            }, visible = isVisible.value, onPreviewKeyEvent = ::handleKeyEvent) {
+                var remindRunningTasks by remember { mutableStateOf(false) }
+
+                Column {
+                    Button(onClick = {
+                        val count = ts.systemTasks.runningTasksCount.load()
+                        if (count > 0) remindRunningTasks = true
+                        else wantsToQuit.value = true }) {
+                        Text("Quit")
+                    }
+
+                    if (remindRunningTasks) {
+                        DialogWindow(onCloseRequest = {
+                            remindRunningTasks = false
+                        }, title = "Cannot quit with still running tasks") {
+                            Row {
+                                Text("Cannot quit with still running tasks")
+                                Button(
+                                    onClick = { remindRunningTasks = false }
+                                ) {
+                                    Text("Close dialog")
+                                }
+                                Button(
+                                    onClick = { remindRunningTasks = false; isVisible.value = false}
+                                ) {
+                                    Text("Put application in tray")
+                                }
+                            }
                         }
                     }
-                } else {
-                    exit()
+
+                    Button(onClick = {
+                        println(windows)
+                        println(windows.size)
+                    }) {
+                        Text("Test")
+                    }
+                    Text(windows.size.toString())
+
+                    LazyColumn {
+                        items(windows, key = { it.task.id }) { it.content(this) }
+                    }
+
                 }
             }
 
-            println("Exiting main window task")
+            if (!isVisible.value) {
+                if (isTraySupported) {
+                    Tray(trayIcon, tooltip = "KTop", menu = {
+                        Item("Open", onClick = { isVisible.value = true })
+                        Item("Exit", onClick = ::exitApplication)
+                    })
+                } else {
+                    NucleusTray(
+                        trayIcon,
+                        tooltip = "KTop",
+                    ) {
+                        Item("Open", onClick = { isVisible.value = true })
+                        Item("Exit", onClick = ::exitApplication)
+                    }
+                }
+            }
+        } else {
+            exitApplication()
         }
+    }
+
+    val applicationTask: Task<Nothing> = ts.createTask(name = "applicationTask") {
+        awaitApplication {
+            DisplayApp()
+        }
+
+        println("Exiting main window task")
+        startedMutex.withLock {
+            this@App.started = false
+        }
+
+        for (event in channel) {
+            if (event is Event.Stop) handleStop {}
+        }
+    }
+
 
     suspend fun TaskScope.show() {
         startedMutex.lock()
         if (!started) {
             started = true
             startedMutex.unlock()
-            start(task)
+            start(applicationTask)
             println("Started task!")
         } else {
             startedMutex.unlock()
         }
     }
 }
-
 
 
 //interface Display {
