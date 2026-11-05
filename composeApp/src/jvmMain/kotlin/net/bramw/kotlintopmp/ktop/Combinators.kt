@@ -1,16 +1,23 @@
 package net.bramw.kotlintopmp.ktop
 
 import kotlinx.coroutines.yield
-import net.bramw.kotlintopmp.ktop.Event.DoStep
-import net.bramw.kotlintopmp.ktop.Event.Stop
-import net.bramw.kotlintopmp.ktop.Event.User
-import net.bramw.kotlintopmp.ktop.Event.ValueChanged
+import net.bramw.kotlintopmp.ktop.Event.*
+import kotlin.time.Duration
 
 
 fun <T : Any> TaskScope.pure(v: T): Task<T> = createTask(initialValue = stableValue(v), kind = TaskKind.PureConst) {}
 fun <T : Any> TaskScope.pure(v: Value<T>?): Task<T> = createTask(initialValue = v, kind = TaskKind.PureValue) {}
 fun <T : Any> TaskScope.pure(f: () -> T): Task<T> =
     createTask(initialValue = stableValue(f()), kind = TaskKind.PureExpr) {}
+
+fun TaskScope.delay(duration: Duration): Task<Unit> = createTask(kind = TaskKind.Delay) { kotlinx.coroutines.delay(duration); this.value = stableValue(Unit) }
+
+fun <T : Any> TaskScope.repeatForever(block: () -> Task<T>): Task<T> = block() step ifStable { repeatForever(block) }
+fun <T : Any> TaskScope.repeat(times: Int, block: (i: Int) -> Task<T>): Task<T> = if (times > 1) {
+    block(times - 1) step ifStable { repeat(times - 1, block) }
+} else {
+    block(times - 1)
+}
 
 context(ts: TaskScope)
 infix fun <T : Any, V : Any> Task<T>.trans(f: (T) -> V): Task<V> = this transValue {

@@ -1,13 +1,14 @@
 package net.bramw.kotlintopmp
 
-import kotlinx.coroutines.delay
 import kotlinx.datetime.DatePeriod
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.plus
 import net.bramw.kotlintopmp.ktop.*
 import net.bramw.kotlintopmp.ktop.sds.*
 import net.bramw.kotlintopmp.ktop.ui.viewInformation
+import net.bramw.kotlintopmp.ktop.ui.viewSharedInformation
 import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.seconds
 
 fun <T : Any> log(name: String): (Event.ValueChanged<T>) -> Value<T>? {
     return {
@@ -206,16 +207,34 @@ suspend fun main() {
         val uiTest3 =
             viewInformation(mapOf(Color.GREEN to Color.RED, Color.RED to Color.BLUE, Color.BLUE to Color.GREEN))
 
-        val uiTest4 = viewInformation(Color.RED)
+        val c = InMemorySDS(Color.RED)
+        val uiTest4 = viewSharedInformation(c)
+        val updateTest: Task<Color> = repeatForever {
+            delay(3.seconds) step ifStable {
+                update(c) {
+                    Color.entries[(it.ordinal + 1) % 3]
+                }
+            }
+        }
 
-        val uiTest5 = viewInformation(
+        val f1 =
             Family(
                 setOf(
                     Person(listOf("bram", "weessies"), 22)
                 ),
                 House(7329)
             )
-        )
+        val f2 = f1.copy(people = f1.people + Person(listOf("ab", "bc"), 35), house = House(1125))
+
+        val f = InMemorySDS(f1)
+        val uiTest5 = viewSharedInformation(f)
+        val updateTest2: Task<Family> = repeat(10) { i ->
+            delay(5.seconds) step ifStable {
+                update(f) {
+                    if ((i % 2) == 0) f1 else f2
+                }
+            }
+        }
 
         val uiTest6 = viewInformation(Container(20, "Hello"))
 
@@ -242,7 +261,9 @@ suspend fun main() {
             uiTest2 transValue log("uiTest2"),
             uiTest3 transValue log("uiTest3"),
             uiTest4 transValue log("uiTest4"),
+            updateTest transValue log("updateTest"),
             uiTest5 transValue log("uiTest5"),
+            updateTest2 transValue log("updateTest2"),
             uiTest6 transValue log("uiTest6"),
         )
         delay(1000.milliseconds)

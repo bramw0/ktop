@@ -1,26 +1,31 @@
 package net.bramw.kotlintopmp.ktop.ui
 
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyItemScope
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.Button
 import androidx.compose.material.Text
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.runtime.*
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.input.key.*
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.*
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import net.bramw.kotlintopmp.ktop.*
 import net.bramw.kotlintopmp.ktop.sds.ReadWriteShared
 import net.bramw.kotlintopmp.ktop.sds.watch
 import net.bramw.kotlintopmp.ktop.sds.withShared
 import kotlin.concurrent.atomics.ExperimentalAtomicApi
+import kotlin.reflect.KClass
+import kotlin.reflect.KType
+import kotlin.reflect.KTypeParameter
+import kotlin.reflect.full.*
+import kotlin.reflect.jvm.jvmErasure
 import kotlin.reflect.typeOf
 import dev.nucleusframework.composenativetray.tray.api.Tray as NucleusTray
 
@@ -66,18 +71,19 @@ inline fun <reified T : Any> TaskScope.viewInformation(value: T): Task<T> {
 inline fun <reified R : Any> TaskScope.viewSharedInformation(sds: ReadWriteShared<R, *>): Task<R> {
     return watch(sds).also { t ->
         val signature = TaskSignature(typeOf<R>(), t)
-        t.runningTasksHandler = { systemTasks.runningTasksTask.sendEvent(Event.RunningTask.Remove(signature)) }
+        t.runningTasksHandler = {
+            systemTasks.runningTasksTask.sendEvent(Event.RunningTask.Remove(signature))
+        }
         // TODO: this will only send the watch(sds) task to the running task list; should this be transformed to the highest parent? But the parent is not yet available in the step if it is created in a continuation...
         systemTasks.runningTasksTask.sendEvent(Event.RunningTask.Add(signature))
     }
 }
 
-typealias UIContentFun = @Composable LazyItemScope.() -> Unit
+// Window cannot be generic since it is instantiated dynamically; therefore the type of value cannot be known at compile time either.
+typealias UIContentFun = @Composable (value: Any?) -> Unit
 data class Window(val task: Task<*>, val content: UIContentFun)
 
 class App(val ts: TaskScope) {
-    private var started = false
-    private val startedMutex = Mutex(false)
     private val isVisible = mutableStateOf(true)
     private val wantsToQuit = mutableStateOf(false)
     internal val windows = mutableStateListOf<Window>()
@@ -109,7 +115,6 @@ class App(val ts: TaskScope) {
     @Composable
     context(t: Task<Nothing>)
     fun ApplicationScope.DisplayApp() = with(t) {
-        val scope = rememberCoroutineScope()
         LaunchedEffect(Unit) {
             for (event in channel) {
                 if (event is Event.Stop) handleStop {
@@ -163,7 +168,10 @@ class App(val ts: TaskScope) {
                     Text(windows.size.toString())
 
                     LazyColumn {
-                        items(windows, key = { it.task.id }) { it.content(this) }
+                        items(windows, key = { it.task.id }) {
+                            val value = ts.systemTasks.runningTaskValues.getOrDefault(it.task.id, null)
+                            it.content(value)
+                        }
                     }
 
                 }
@@ -196,277 +204,271 @@ class App(val ts: TaskScope) {
         }
 
         println("Exiting main window task")
-        startedMutex.withLock {
-            this@App.started = false
-        }
 
         for (event in channel) {
             if (event is Event.Stop) handleStop {}
         }
     }
+}
 
 
-    suspend fun TaskScope.show() {
-        startedMutex.lock()
-        if (!started) {
-            started = true
-            startedMutex.unlock()
-            start(applicationTask)
-            println("Started task!")
-        } else {
-            startedMutex.unlock()
+fun KType.serialize(allMembers: Boolean = false, v: Any? = null): String {
+    val clazz = this@serialize.jvmErasure
+    val properties = if (allMembers) clazz.memberProperties else clazz.declaredMemberProperties
+    val base = buildString {
+        append(this@serialize.serializeTypeArguments())
+    }
+    return if (properties.isEmpty()) {
+        base
+    } else {
+        buildString {
+            append(base)
+            append("(")
+            properties.forEachIndexed { index, it ->
+                append(it.name)
+                append("=")
+                if (v != null) {
+                    append(it.call(v))
+                } else {
+                    append(it.returnType.serialize(allMembers))
+                }
+                if (index < properties.size - 1) append(", ")
+            }
+            append(")")
         }
     }
 }
 
+internal fun KType.serializeTypeArguments(): String {
+    val clazz = this.jvmErasure
+    val base = buildString {
+        append(clazz.simpleName ?: "Anonymous")
+        if (this@serializeTypeArguments.isMarkedNullable) append("?")
+    }
 
-//interface Display {
-//    fun display(): String
-//}
-//
-//@Composable
-//fun <T> ViewGenericValue(value: T, f: (T) -> String = { it.toString() }) {
-//    MaterialTheme {
-//        Text(f(value))
-//    }
-//}
-//
-//@Composable
-//fun ViewDisplayValue(value: Display) = ViewGenericValue(value) { it.display() }
-//
-//@Composable
-//fun ViewStringValue(value: String) = ViewGenericValue(value) { it }
-//
-//@Composable
-//fun ViewNumberValue(value: Number) = ViewGenericValue(value)
-//
-//@Composable
-//fun UpdateStringValue(task: Task<String>) = @Composable { value: String ->
-//    UpdateGenericValue(value, task, { oldValue, newValue ->
-//        Pair(true, oldValue?.copy(first = newValue.toString()))
-//    }) { it }
-//}
-//
-//@Composable
-//fun UpdateNumberValue(task: Task<Number>) = @Composable { value: Number ->
-//    // TODO: do not match on Number interface, but match on actual class (Int or Float or etc) instead
-//    UpdateGenericValue(value, task, { oldValue, newValue ->
-//        Pair(true, oldValue?.copy(first = newValue.toString().toInt()))
-//    })
-//}
-//
-//@Composable
-//fun <T> UpdateGenericValue(
-//    value: T,
-//    task: Task<T>,
-//    validator: (Value<T>, CharSequence) -> Pair<Boolean, Value<T>>,
-//    f: (T) -> String = { it.toString() }
-//) {
-//    MaterialTheme {
-//        OutlinedTextField(
-//            state = rememberTextFieldState(initialText = f(value)),
-//            label = { Text("Label") },
-//            outputTransformation = {
-//                println("Using value: ${asCharSequence()}")
-//                val result = validator(task.value, asCharSequence())
-//                if (result.first) {
-//                    task.value = result.second
-//                }
-//            })
-//    }
-//}
-//
-//@Composable
-//fun <T> TaskRow(value: T, window: UI.UIWindow, f: @Composable (T) -> Unit) {
-//    window.task.registerDestructionHandler {
-//        println("Running handler remove window for task ${fullID()}")
-//        UI.removeWindow(window)
-//    }
-//
-//    Row {
-//        Button(
-//            onClick = {
-//                println("CONTINUING")
-//                runBlocking {
-//                    window.task.sendEvent(Event.Action(UserAction.Continue))
-//                }
-//            }) {
-//            Text("C")
-//        }
-//        Button(
-//            onClick = {
-//                println("REMOVING")
-//                runBlocking {
-//                    window.task.sendEvent(Event.Stop)
-//                }
-//            }) {
-//            Text("R")
-//        }
-//        f(value)
-//    }
-//}
-//
-//typealias KeyPressListener = (KeyEvent) -> UI.KeyPressResult
-//
-//object UI {
-//
-//    private fun wrapWithShow(block: () -> Unit) {
-//        show()
-//        block()
-//    }
-//
-//    class UIWindow(
-//        val task: Task<*>,
-//        block: UIWindow.() -> Unit,
-//    ) {
-//        lateinit var content: @Composable LazyItemScope.() -> Unit
-//        var keyPressListener: KeyPressListener? = null
-//
-//        init {
-//            apply(block)
-//        }
-//
-//        fun content(block: @Composable LazyItemScope.() -> Unit) {
-//            this.content = block
-//        }
-//
-//        fun keyPressListener(block: KeyPressListener) {
-//            this.keyPressListener = block
-//        }
-//    }
-//
-//    data class KeyPressResult(val handled: Boolean, val removeListener: Boolean)
-//
-//    private lateinit var task: Task<Nothing>
-//
-//    private val windows = mutableStateListOf<UIWindow>()
-//    private val isOpen = mutableStateOf(true)
-//
-//    private var shown = false
-//
-//    private val keyPressListeners = mutableListOf<KeyPressListener>().apply {
-//        add { event ->
-//            if (event.type == KeyEventType.KeyUp && (event.key == Key.Escape || event.key == Key.Enter || event.key == Key.Q) && windows.isEmpty()) {
-//                println("No longer open!")
-//                isOpen.value = false
-//                KeyPressResult(handled = true, removeListener = true)
+    return if (this.arguments.isEmpty()) {
+        base
+    } else {
+        buildString {
+            append(base)
+            append("<")
+            this@serializeTypeArguments.arguments.forEachIndexed { index, it ->
+                append(clazz.typeParameters[index].name)
+                append("=")
+                it.type?.let { t ->
+                    append(t.serializeTypeArguments())
+                } ?: append("*")
+                if (index < this@serializeTypeArguments.arguments.size - 1) append(", ")
+            }
+            append(">")
+        }
+    }
+}
+
+const val ENABLE_BORDERS = false
+
+val textBorderModifier = Modifier.border(width = 1.dp, color = if (ENABLE_BORDERS) Color.Red else Color.Transparent)
+val rowBorderModifier = Modifier.border(width = 1.dp, color = if (ENABLE_BORDERS) Color.Blue else Color.Transparent)
+val columnBorderModifier = Modifier.border(width = 1.dp, color = if (ENABLE_BORDERS) Color.Green else Color.Transparent)
+
+@Composable
+fun TextWithBorder(modifier: Modifier, text: String) {
+    Text(modifier = modifier, text = text)
+}
+
+@Composable
+fun TextWithBorder(text: String) {
+    TextWithBorder(textBorderModifier, text)
+}
+
+internal fun buildEnumString(v: Any, c: KClass<*>): String {
+    return buildString {
+        append(c.simpleName)
+        append(".")
+        val name: String? = c.memberProperties.find { it.name == "name" }?.let {
+            it.call(v) as? String
+        }
+        append(name)
+        if (c.declaredMemberProperties.isNotEmpty()) {
+            append("(")
+            c.declaredMemberProperties.forEachIndexed { index, prop ->
+                append(prop.name)
+                append("=")
+                append(prop.call(v))
+                if (index < c.declaredMemberProperties.size - 1) append(", ")
+            }
+            append(")")
+        }
+    }
+}
+
+@Composable
+internal fun generateCollectionUI(type: KType, v: Any, c: KClass<*>) {
+    val iteratorRef = c.declaredMemberFunctions.filter {
+        it.valueParameters.isEmpty()
+    }.find {
+        it.name == "iterator"
+    }
+    val iterator = iteratorRef?.call(v) as Iterator<*>
+    FlowColumn(modifier = columnBorderModifier, verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        iterator.asSequence().forEachIndexed { i, el ->
+            el?.let {
+                println("$i: ${it::class}")
+                FlowRow(modifier = rowBorderModifier) {
+                    val elType = type.arguments.last().type
+                    elType?.let { type ->
+                        recursiveGenerateView(type, it)
+                    }
+                }
+                HorizontalDivider(thickness = 1.dp)
+            }
+            println("$i: $el")
+        }
+
+    }
+}
+
+@Composable
+internal fun generateMapUI(type: KType, v: Any, c: KClass<*>) {
+    // Two possible ways: list all entries row by row, with the key and value in a single row.
+//    val entriesRef = c.declaredMemberProperties.find { it.name == "entries" }
+//    entriesRef?.let {
+//        val entries = it.call(v) as? Set<Map.Entry<*, *>>
+//        entries?.forEachIndexed { i, entry ->
+//            println("$i: $entry")
+//            FlowRow(modifier = rowBorderModifier) {
+//                val entryTypes = type.arguments.takeLast(2)
+//                val keyType = entryTypes[0].type
+//                keyType?.let { t ->
+//                    recursiveGenerateView(t, entry.key)
+//                } ?: TextWithBorder("Key $i does not have a type")
+//                val valueType = entryTypes[1].type
+//                valueType?.let { t ->
+//                    recursiveGenerateView(t, entry.value)
+//                } ?: TextWithBorder("Value $i does not have a type")
 //            }
-//            KeyPressResult(handled = false, removeListener = false)
+//            println("${entry.key} = ${entry.value}")
 //        }
 //    }
-//
-//    fun removeWindow(window: UIWindow) {
-//        windows.remove(window)
-//        runBlocking {
-//            window.task.sendEvent(Event.Stop)
-//        }
-//    }
-//
-//    fun addKeyPressListener(listener: KeyPressListener) {
-//        wrapWithShow {
-//            keyPressListeners.add(listener)
-//        }
-//    }
-//
-//    fun add(task: Task<*>, block: UIWindow.() -> Unit) {
-//        val window = UIWindow(task, block)
-//        window.keyPressListener?.let { listener ->
-//            addKeyPressListener(listener)
-//        }
-//        wrapWithShow {
-//            windows.add(window)
-//        }
-//    }
-//
-//    fun show() {
-//        if (!shown) {
-//            shown = true
-//
-////            task = TaskExecutor.startTask {
-////                awaitApplication {
-////                    if (isOpen.value) {
-////                        Window(
-////                            onCloseRequest = ::exitApplication, onKeyEvent = { event ->
-////                                val removedListeners = mutableListOf<KeyPressListener>()
-////
-////                                val handled = keyPressListeners.map {
-////                                    val result = it(event)
-////                                    if (result.removeListener) removedListeners.add(it)
-////                                    result.handled
-////                                }.all {
-////                                    it
-////                                }
-////                                keyPressListeners.removeAll(removedListeners)
-////                                handled
-////                            }) {
-////                            LazyColumn {
-////                                items(windows) { window ->
-////                                    window.content(this)
-////                                }
-////                            }
-////                        }
-////                    }
-////                }
-////            }
-//        }
-//    }
-//}
+    // Or: list all keys in a column row by row and list all values in a column row by row. This makes sure that all the values start at the same X position on the screen.
+    val keysRef = c.declaredMemberProperties.find { it.name == "keys" }
+    val valuesRef = c.declaredMemberProperties.find { it.name == "values" }
+    FlowRow(modifier = rowBorderModifier) {
+        keysRef?.let {
+            val keys = it.call(v) as? Set<*>
+            FlowColumn(modifier = columnBorderModifier, verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                keys?.forEachIndexed { i, key ->
+                    println("key $i: $key")
+                    val entryTypes = type.arguments.takeLast(2)
+                    val keyType = entryTypes[0].type
+                    keyType?.let { t ->
+                        recursiveGenerateView(t, key)
+                    } ?: TextWithBorder("Key $i does not have a type")
+                }
+            }
+        }
+        valuesRef?.let {
+            val values = it.call(v) as? Collection<*>
+            FlowColumn(modifier = columnBorderModifier, verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                values?.forEachIndexed { i, value ->
+                    println("value $i: $value")
+                    val entryTypes = type.arguments.takeLast(2)
+                    val valueType = entryTypes[1].type
+                    valueType?.let { t ->
+                        recursiveGenerateView(t, value)
+                    } ?: TextWithBorder("Key $i does not have a type")
+                }
+            }
+        }
+    }
+}
 
+@Composable
+internal fun generateCustomUI(type: KType, v: Any, c: KClass<*>) {
+    FlowColumn(
+        modifier = columnBorderModifier,
+//        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        c.declaredMemberProperties.forEach {
+            val returnType = run {
+                // KType.jvmErasure returns class kotlin.Any if it is called on a type parameter. Therefore, get the actual runtime type of the type parameter from the container KType and use that instead.
+                if (it.returnType.classifier is KTypeParameter) {
+                    val param = it.returnType.classifier as KTypeParameter
+                    val i = c.typeParameters.indexOf(param)
+                    if (i > -1 && i < type.arguments.size) {
+                        return@run type.arguments[i].type
+                            ?: it.returnType // If it is a star projection, it will display Any using its original return type
+                    }
+                }
 
-//                println("Running forEach")
-//                windows.forEach { window ->
-//                    println("Showing window $window")
-//                    if (window.isOpen) {
-//                        Window(
-//                            onCloseRequest = { window.isOpen = false },
-//                            title = window.title,
-//                            content = window.block,
-//                            onKeyEvent = { event ->
-//                                if (event.type == KeyEventType.KeyUp && (event.key == Key.Escape || event.key == Key.Enter || event.key == Key.Q)) {
-//                                    runBlocking {
-//                                        window.task.sendEvent(UserKeyPressed(event.key))
-//                                    }
-//                                    window.isOpen = false
-//                                }
-//                                println(event)
-//                                false
-//                            }
-//                        )
-//                    }
-//                }
+                it.returnType
+            }
 
+            if (returnType.jvmErasure.javaPrimitiveType != null || returnType.jvmErasure.isSubclassOf(String::class)) {
+                // Show primitive values inline
+                FlowRow {
+                    TextWithBorder("${it.name}: ${returnType.serializeTypeArguments()}")
+                    val newV = it.call(v)
+                    println("${it.name}=$newV")
+                    recursiveGenerateView(returnType, newV)
+                }
+            } else {
+                TextWithBorder("${it.name}: ${returnType.serializeTypeArguments()}")
+                FlowRow(modifier = rowBorderModifier.padding(start = 10.dp)) {
+                    val newV = it.call(v)
+                    println("${it.name}=$newV")
+                    recursiveGenerateView(returnType, newV)
+                }
+            }
+        }
+    }
+}
 
-//@Composable
-//@Preview
-//fun App(channel: SendChannel<TaskEvent>, onClick: () -> Unit) {
-//    MaterialTheme {
-//        var showContent by remember { mutableStateOf(false) }
-//        Column(
-//            modifier = Modifier
-//                .background(MaterialTheme.colorScheme.primaryContainer)
-//                .safeContentPadding()
-//                .fillMaxSize(),
-//            horizontalAlignment = Alignment.CenterHorizontally,
-//        ) {
-//            Button(onClick = {
-//                onClick()
-//                showContent = !showContent
-//                runBlocking {
-//                    channel.send(TaskEvent.UserKeyPressed("Q"))
-//                }
-//            }) {
-//                Text("Click me!")
-//            }
-//            AnimatedVisibility(showContent) {
-//                val greeting = remember { Greeting().greet() }
-//                Column(
-//                    modifier = Modifier.fillMaxWidth(),
-//                    horizontalAlignment = Alignment.CenterHorizontally,
-//                ) {
-//                    Image(painterResource(Res.drawable.compose_multiplatform), null)
-//                    Text("Compose: $greeting")
-//                }
-//            }
-//        }
-//    }
-//}
+@Composable
+internal fun recursiveGenerateView(type: KType, value: Any?) {
+    val base: @Composable () -> Unit = {
+        val c = type.jvmErasure
+        value?.let { v ->
+            if (c.isSubclassOf(Enum::class) && c.java.isEnum) {
+                // enum
+                TextWithBorder(
+                    modifier = textBorderModifier.padding(start = 10.dp), text = buildEnumString(v, c)
+                )
+            } else if (c.isSubclassOf(Map::class)) {
+                // map
+                generateMapUI(type, v, c)
+            } else if (c.isSubclassOf(Collection::class)) {
+                // TODO: can this be simplified further to a subclass of Iterable, since we only use the iterator?
+                // collection: a list or a set or a similar collection
+                generateCollectionUI(type, v, c)
+            } else {
+                if (c.javaPrimitiveType != null || c.isSubclassOf(String::class)) {
+                    TextWithBorder(
+                        modifier = textBorderModifier.padding(start = 10.dp), text = v.toString()
+                    )
+                } else {
+                    generateCustomUI(type, v, c)
+                }
+                // TODO: make sure that spacing is correct for nested classes
+                // builtin or custom class
+            }
+        } ?: TextWithBorder("Is null!")
+    }
+
+    return base()
+}
+
+@Composable
+fun generateUI(sig: TaskSignature, value: Any?) {
+    // Align the task UI and the stop button in a row.
+    FlowRow(modifier = rowBorderModifier.padding(10.dp)) {
+        // Align the task UI as a vertical column of elements.
+        FlowColumn(modifier = columnBorderModifier, verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            TextWithBorder("${sig.task.taskName}: ${sig.type.serializeTypeArguments()}\t")
+            recursiveGenerateView(sig.type, value)
+        }
+        Button(onClick = { sig.task.climbParentsAndStop() }) {
+            Text("Stop!")
+        }
+    }
+}

@@ -28,7 +28,7 @@ sealed class Event(val name: String) {
         data class Add(val window: Window) : Event("UIWindow.Add")
         data class Remove(val window: Window) : Event("UIWindow.Remove")
     }
-    data class ValueChanged<T : Any>(val taskId: Int, val value: Value<T>?) : Event("ValueChanged")
+    data class ValueChanged<T : Any>(val taskId: TaskId, val value: Value<T>?) : Event("ValueChanged")
     data class DoStep<T : Any>(val newTask: Task<T>, val causedByStableValue: Boolean) : Event("DoStep")
 
     data object Stop : Event("Stop")

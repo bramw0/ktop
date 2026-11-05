@@ -290,11 +290,6 @@ fun <R : Any> TaskScope.get(sds: ReadWriteShared<R, *>): Task<R> {
 
             yield()
         }
-
-//        sds.lock.withLock {
-//            val value = sds.read()
-//            this.value = stableValue(value)
-//        }
     }
 }
 
@@ -336,13 +331,6 @@ fun <R, W : Any> TaskScope.update(sds: ReadWriteShared<R, W>, f: (R) -> W): Task
                 yield()
             }
         }
-
-
-//        sds.lock.withLock {
-//            val newValue = f(sds.read())
-//            sds.write(newValue)
-//            this.value = stableValue(newValue)
-//        }
     }
 }
 
@@ -350,128 +338,3 @@ fun <R, T : Any> withShared(initialValue: R, block: (Shared<R>) -> Task<T>): Tas
     val s = InMemorySDS(initialValue)
     return block(s)
 }
-
-// TODO: does this implementation have the same semantics as above? the combine combinator would have to be defined in ReadOnlyShared, WriteOnlyShared and ReadWriteShared instead of once for all the types
-//interface ReadOnlyShared<R> {
-//    suspend fun read(): R
-//
-//    fun <T> withRead(f: (R) -> T): ReadOnlyShared<T> {
-//        return object : ReadOnlyShared<T> {
-//            override suspend fun read(): T = f(this@ReadOnlyShared.read())
-//        }
-//    }
-//}
-//
-//// TODO: is there a way to remove the R parameter and still be able to override the function inside of ReadWriteShared using its R parameter?
-//interface WriteOnlyShared<W, R> {
-//    suspend fun write(newValue: W)
-//
-//    fun <T> withWrite(f: (T, R?) -> W?): WriteOnlyShared<T, R> {
-//        return object : WriteOnlyShared<T, R> {
-//            override suspend fun write(newValue: T) {
-//                // TODO: Make sure to lock the data source
-//                f(newValue, null)?.let {
-//                    this@WriteOnlyShared.write(it)
-//                }
-//            }
-//        }
-//    }
-//}
-//
-//interface ReadWriteShared<R, W> : ReadOnlyShared<R>, WriteOnlyShared<W, R> {
-//    override fun <T> withRead(f: (R) -> T): ReadWriteShared<T, W> {
-//        return object : ReadWriteShared<T, W> {
-//            override suspend fun write(newValue: W) = this@ReadWriteShared.write(newValue)
-//
-//            override suspend fun read(): T = f(this@ReadWriteShared.read())
-//        }
-//    }
-//
-//    override fun <T> withWrite(f: (T, R?) -> W?): ReadWriteShared<R, T> {
-//        return object : ReadWriteShared<R, T> {
-//            override suspend fun read(): R = this@ReadWriteShared.read()
-//            override suspend fun write(newValue: T) {
-//                // TODO: Make sure to lock the data source
-//                f(newValue, read())?.let {
-//                    this@ReadWriteShared.write(it)
-//                }
-//            }
-//        }
-//    }
-//
-//    // withReadWrite function does not work well with Kotlin conventions due to 2 lambdas in the argument. Better to chain .withWrite { ... }.withRead { ... }
-////    fun <T, V> withReadWrite(readF: (R) -> T, writeF: (V, R?) -> W?): ReadWriteShared<T, V> {
-////        return withWrite(writeF).withRead(readF)
-////    }
-//
-//    // toReadOnly function using withWrite combinator is not needed since automatic upcasting from ReadWriteShared to ReadOnlyShared is performed.
-//}
-
-//interface ReadWriteShared<R, W> {
-//    suspend fun read(): R = error("")
-//    suspend fun write(newValue: W): Unit = error("")
-//
-//    fun <T> withRead(f: (R) -> T): ReadWriteShared<T, W> {
-//        return object : ReadWriteShared<T, W> {
-//            override suspend fun read(): T = f(this@ReadWriteShared.read())
-//            override suspend fun write(newValue: W) = this@ReadWriteShared.write(newValue)
-//        }
-//    }
-//
-//    fun <T> withWrite(f: (T, R?) -> W?): ReadWriteShared<R, T> {
-//        return object : ReadWriteShared<R, T> {
-//            override suspend fun read(): R = this@ReadWriteShared.read()
-//            override suspend fun write(newValue: T) {
-//                // TODO: Make sure to lock the data source
-//                f(newValue, read())?.let {
-//                    this@ReadWriteShared.write(it)
-//                }
-//            }
-//        }
-//    }
-//}
-//
-//typealias ReadOnlyShared<R> = ReadWriteShared<R, Any>
-//typealias WriteOnlyShared<W> = ReadWriteShared<Any, W>
-//typealias Shared<R> = ReadWriteShared<R, R>
-
-//class Const<R>(val value: R) : ReadOnlyShared<R> {
-//    override suspend fun read(): R {
-//        return value
-//    }
-//}
-//
-//object CurrentTime : ReadOnlyShared<LocalDateTime> {
-//    override suspend fun read(): LocalDateTime {
-//        return Clock.System.now().toLocalDateTime(TimeZone.currentSystemDefault())
-//    }
-//}
-//
-//object Null : WriteOnlyShared<Unit> {
-//    override suspend fun write(newValue: Unit) {}
-//}
-//
-//
-//fun <R> TaskScope.get(sds: ReadOnlyShared<R>): Task<R> {
-//    return createTask {
-//        this.value = stableValue(sds.read())
-//    }
-//}
-//
-//fun <W> TaskScope.set(sds: WriteOnlyShared<W>, newValue: W): Task<W> {
-//    return createTask {
-//        sds.write(newValue)
-//        this.value = stableValue(newValue)
-//    }
-//}
-
-// Multiple approaches:
-// - typealias approach:
-//      typealiases cannot have star projections in their expansion so the readonly and writeonly aliases cannot work as intended since no SDSs match ReadWriteShared<R, Any> or Any = Unit or Any = Nothing
-//      but makes it so there is one central place for combinators to live
-// - readwriteshared as top interface:
-//      downcasting will not work so new objects have to be made when casting a readwriteshared to readonly or writeonly
-//      has central place for combinators to live
-// - readwriteshared inherits from readonly and writeonly:
-//      upcasting works flawlessly so set and get only get the read and write part of the shared data source
-//      but there is no central place for combinators to live since combinators also have to work on readonly and writeonly SDSs

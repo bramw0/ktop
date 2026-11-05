@@ -7,19 +7,24 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.Channel.Factory.UNLIMITED
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import net.bramw.kotlintopmp.ktop.Event.Stop
 import kotlin.properties.Delegates
+import kotlin.reflect.KType
+import kotlin.reflect.typeOf
 
 
 typealias WorkFunction<T> = suspend Task<T>.() -> Unit
 private typealias DestructionFunction<T> = Task<T>.() -> Unit
 
 enum class TaskKind {
-    PureConst, PureValue, PureExpr, Transform, And, Or, OrLeft, OrRight, Step, Watch, Get, Set, Update, Custom
+    PureConst, PureValue, PureExpr, Transform, And, Or, OrLeft, OrRight, Step, Watch, Get, Set, Update, Delay, Custom
 }
+
+typealias TaskId = Int
 
 // What are the consequences of assigning an id to every running task, or every created task (that may never run at all)?
 class Task<T : Any>(
-    var id: Int,
+    var id: TaskId,
     var taskName: String,
     var initialValue: Value<T>? = null,
     val kind: TaskKind = TaskKind.Custom,
@@ -122,4 +127,23 @@ class Task<T : Any>(
             }
         }
     }
+}
+
+suspend fun <T : Any> Task<T>.handleStop(block: suspend Task<T>.() -> Unit) {
+    block()
+    println("task $id: cancelling channel")
+    channel.cancel()
+}
+
+fun Task<*>.highestParent(): Task<*> {
+    var t = this
+    while (t.hasParent()) {
+        t = t.parent
+    }
+    return t
+
+}
+
+fun Task<*>.climbParentsAndStop() {
+    highestParent().sendEvent(Stop)
 }
